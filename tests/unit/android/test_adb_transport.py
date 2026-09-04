@@ -88,3 +88,92 @@ def test_screen_size_and_foreground_app_are_parsed() -> None:
 
     assert device.screen_size() == (1080, 2400)
     assert device.foreground_app() == "com.example.app"
+
+
+def test_foreground_app_falls_back_to_android_14_resumed_activity() -> None:
+    runner = RecordingRunner(
+        [
+            result(b"WINDOW MANAGER WINDOWS\n"),
+            result(
+                b"  topResumedActivity=ActivityRecord{abc u0 "
+                b"com.google.android.apps.nexuslauncher/.NexusLauncherActivity t7}\n"
+            ),
+        ]
+    )
+
+    assert AdbTransport("device", runner=runner).foreground_app() == "com.google.android.apps.nexuslauncher"
+    assert runner.calls == [
+        ["adb", "-s", "device", "shell", "dumpsys", "window", "windows"],
+        ["adb", "-s", "device", "shell", "dumpsys", "activity", "activities"],
+    ]
+
+
+def test_foreground_app_falls_back_to_oem_resumed_activity() -> None:
+    runner = RecordingRunner(
+        [
+            result(b"WINDOW MANAGER WINDOWS\n"),
+            result(b"mResumedActivity: ActivityRecord{abc u0 com.miui.home/.launcher.Launcher t7}\n"),
+        ]
+    )
+
+    assert AdbTransport("device", runner=runner).foreground_app() == "com.miui.home"
+
+
+def test_foreground_app_returns_none_when_all_supported_formats_are_unavailable() -> None:
+    runner = RecordingRunner([result(b"WINDOW MANAGER WINDOWS\n"), result(b"no resumed activity\n")])
+
+    assert AdbTransport("device", runner=runner).foreground_app() is None
+
+
+def test_resolved_settings_and_home_packages_are_parsed_deterministically() -> None:
+    runner = RecordingRunner(
+        [
+            result(b"priority=1\ncom.android.settings/.homepage.SettingsHomepageActivity\n"),
+            result(b"com.miui.home/.launcher.Launcher\n"),
+        ]
+    )
+    device = AdbTransport("device", runner=runner)
+
+    assert device.settings_package() == "com.android.settings"
+    assert device.home_package() == "com.miui.home"
+    assert runner.calls == [
+        [
+            "adb",
+            "-s",
+            "device",
+            "shell",
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            "-a",
+            "android.settings.SETTINGS",
+        ],
+        [
+            "adb",
+            "-s",
+            "device",
+            "shell",
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.HOME",
+        ],
+    ]
+
+
+def test_activity_resolution_rejects_ambiguous_or_unavailable_output() -> None:
+    runner = RecordingRunner(
+        [
+            result(b"com.example.first/.One\ncom.example.second/.Two\n"),
+            result(b"No activity found\n"),
+        ]
+    )
+    device = AdbTransport("device", runner=runner)
+
+    assert device.settings_package() is None
+    assert device.home_package() is None

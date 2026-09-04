@@ -4,6 +4,11 @@
 
 from .adb_transport import AdbDevice, AdbError, AdbTransport
 from .backend import AndroidBackendError, AndroidDeviceBackend
+from .device_profile import (
+    AndroidDeviceProfile,
+    AndroidDeviceProfileError,
+    discover_android_device_profile,
+)
 from .stability import UiStabilityResult, UiStabilityWaiter
 
 __all__ = [
@@ -12,6 +17,9 @@ __all__ = [
     "AdbTransport",
     "AndroidBackendError",
     "AndroidDeviceBackend",
+    "AndroidDeviceProfile",
+    "AndroidDeviceProfileError",
     "UiStabilityResult",
     "UiStabilityWaiter",
+    "discover_android_device_profile",
 ]
