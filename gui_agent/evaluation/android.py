@@ -600,6 +600,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-name", required=True, help="model name accepted by the MAI-UI endpoint")
     parser.add_argument("--artifact-directory", type=Path, default=Path("artifacts/android-p3"))
     parser.add_argument(
+        "--adb-path",
+        default="adb",
+        help="ADB executable path; use this when platform-tools is not on PATH",
+    )
+    parser.add_argument(
         "--home-package",
         help="optional launcher package override; the production preflight resolves it when omitted",
     )
@@ -620,6 +625,7 @@ def main(argv: list[str] | None = None) -> int:
         llm_base_url=args.llm_base_url,
         model_name=args.model_name,
         artifact_directory=args.artifact_directory,
+        adb_path=args.adb_path,
         home_package=args.home_package,
         settings_package=args.settings_package,
         max_steps=args.max_steps,

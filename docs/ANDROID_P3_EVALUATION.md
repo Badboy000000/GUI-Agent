@@ -16,6 +16,7 @@ JSONL 审计回放；没有另建模型服务或使用假模型代替生产推�
 ```powershell
 python -m gui_agent.evaluation.android `
   --serial emulator-5554 `
+  --adb-path C:\\Users\\lwj\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe `
   --llm-base-url http://127.0.0.1:8000/v1 `
   --model-name your-mai-ui-model `
   --artifact-directory artifacts/android-p3/emulator
@@ -51,6 +52,7 @@ python -m gui_agent.evaluation.android `
 ```powershell
 python -m gui_agent.evaluation.android `
   --serial REDMI_SERIAL `
+  --adb-path C:\\Users\\lwj\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe `
   --llm-base-url http://127.0.0.1:8000/v1 `
   --model-name your-mai-ui-model `
   --artifact-directory artifacts/android-p3/redmi `
