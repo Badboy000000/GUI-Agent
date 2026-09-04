@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Small, testable wrapper around the Android Debug Bridge executable.
 
 The transport deliberately accepts command arguments as a sequence.  It never

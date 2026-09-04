@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Black-box acceptance tests for the Android MVP task boundary.
 
 These tests intentionally use no ADB process or model service.  They exercise

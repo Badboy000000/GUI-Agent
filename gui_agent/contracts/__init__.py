@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Stable contracts shared by the brain, runtime, and platform adapters."""
 
 from .actions import (

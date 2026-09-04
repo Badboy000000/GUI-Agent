@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Task identifiers and lifecycle states owned by the orchestration layer."""
 
 from __future__ import annotations

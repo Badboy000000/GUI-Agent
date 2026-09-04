@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """The trust boundary between model proposals and platform commands."""
 
 from __future__ import annotations

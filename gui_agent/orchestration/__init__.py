@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Task lifecycle primitives; the execution loop is intentionally separate."""
 
 from .task_state_machine import InvalidTaskTransition, TaskStateMachine

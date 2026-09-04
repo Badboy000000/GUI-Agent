@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 from __future__ import annotations
 
 import pytest

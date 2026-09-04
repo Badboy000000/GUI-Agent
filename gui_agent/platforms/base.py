@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Stable seam between task orchestration and a concrete device platform."""
 
 from __future__ import annotations

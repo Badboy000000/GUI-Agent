@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Immutable snapshot contract produced by a device backend."""
 
 from __future__ import annotations

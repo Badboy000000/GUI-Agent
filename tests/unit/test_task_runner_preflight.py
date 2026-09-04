@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 from gui_agent.actions import AndroidActionCompiler
 from gui_agent.contracts import Observation, ProposedAction
 from gui_agent.orchestration.agent_loop import TaskRunner

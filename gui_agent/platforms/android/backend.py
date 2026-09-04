@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """ADB-backed Android implementation of the MVP device backend seam."""
 
 from __future__ import annotations

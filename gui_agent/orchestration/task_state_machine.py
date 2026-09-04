@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Strict task lifecycle transition guard."""
 
 from __future__ import annotations

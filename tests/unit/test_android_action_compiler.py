@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 import pytest
 
 from gui_agent.actions import ActionCompilationError, AndroidActionCompiler

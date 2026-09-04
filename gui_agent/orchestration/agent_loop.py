@@ -1,9 +1,12 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Minimal, auditable observe-decide-validate-execute task loop."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from time import sleep
+from typing import Callable, Protocol
 
 from gui_agent.contracts import Observation, ProposedAction, TaskState, validate_action
 from gui_agent.orchestration.task_state_machine import TaskStateMachine
@@ -43,24 +46,30 @@ class TaskRunner:
     or typing are not safely repeatable after a transport failure.
     """
 
-    def __init__(self, backend: DeviceBackend, brain: Brain, compiler: ActionCompiler, verifier: SuccessVerifier, *, max_steps: int = 20) -> None:
+    def __init__(self, backend: DeviceBackend, brain: Brain, compiler: ActionCompiler, verifier: SuccessVerifier, *, max_steps: int = 20, wait_seconds: float = 1.0, sleeper: Callable[[float], None] = sleep) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
+        if wait_seconds < 0:
+            raise ValueError("wait_seconds must not be negative")
         self._backend = backend
         self._brain = brain
         self._compiler = compiler
         self._verifier = verifier
         self._max_steps = max_steps
+        self._wait_seconds = wait_seconds
+        self._sleeper = sleeper
 
     def run(self, instruction: str) -> TaskResult:
         machine = TaskStateMachine()
         machine.transition_to(TaskState.RUNNING)
         last_observation: Observation | None = None
+        completed_steps = 0
         try:
             if not self._backend.health():
                 machine.transition_to(TaskState.FAILED)
                 return TaskResult(machine.state, 0, "device health check failed", None)
             for step in range(self._max_steps):
+                completed_steps = step + 1
                 last_observation = self._backend.observe()
                 proposed = self._brain.decide(instruction, last_observation)
                 validated = validate_action(proposed, last_observation)
@@ -74,11 +83,12 @@ class TaskRunner:
                     machine.transition_to(TaskState.WAITING_FOR_CONFIRMATION)
                     return TaskResult(machine.state, step, validated.arguments["text"], last_observation)
                 if validated.name == "wait":
+                    self._sleeper(self._wait_seconds)
                     continue
                 command = self._compiler.compile(validated, last_observation)
                 self._backend.execute(command)
             machine.transition_to(TaskState.FAILED)
-            return TaskResult(machine.state, self._max_steps, "step budget exhausted", last_observation)
+            return TaskResult(machine.state, completed_steps, "step budget exhausted", last_observation)
         except Exception as error:
             machine.transition_to(TaskState.FAILED)
-            return TaskResult(machine.state, 0 if last_observation is None else last_observation.sequence + 1, str(error), last_observation)
+            return TaskResult(machine.state, completed_steps, str(error), last_observation)

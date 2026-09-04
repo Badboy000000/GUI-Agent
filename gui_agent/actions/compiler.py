@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Android action compilation with explicit coordinate and app-name policy."""
 
 from __future__ import annotations

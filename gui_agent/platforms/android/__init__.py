@@ -1,3 +1,5 @@
+# Copyright (c) 2026, 东篱馆主
+
 """Android platform adapter for the GUI Agent MVP."""
 
 from .adb_transport import AdbDevice, AdbError, AdbTransport
