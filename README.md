@@ -38,6 +38,17 @@
 5. **真实环境 / 评测基础设施（Environment & Evaluation）**
    在真实设备 / 模拟器上跑任务的运行时环境，以及配套的评测、回放与回归体系。
 
+## 开发进度
+
+- **P1 已完成**：Android ADB 的健康检查、截图观测、受限动作下发、动作校验与有界的闭环任务执行。
+- **P2 已完成（仅 Android）**：界面稳定等待、可恢复的任务会话、人工确认/接管，以及本地 JSONL 审计回放。
+  - `wait` 可组合 `UiStabilityWaiter(backend).wait`，以连续截图指纹和前台 App 一致性为准，并受超时和样本数双重限制。
+  - `ask_user` 会暂停同一 `TaskRunner`；调用 `approve_confirmation()` 后可继续，调用 `take_over(reason)` 会取消任务并把设备交还人工。
+  - `JsonlAuditRecorder` 写入本地 append-only 事件；`load_replay()` 仅校验和还原事件，绝不重新执行设备动作。
+  - 真机 smoke 是显式 opt-in，默认跳过且只读；具体前置条件见 [Android smoke 说明](docs/ANDROID_SMOKE.md)。
+
+P2 不扩展网页、桌面或其他设备平台。
+
 ## 目标
 
 把「截图 + 指令 → 动作 JSON」的单点推理，扩展为能在真实设备上**自主完成完整任务**的 GUI Agent 系统。

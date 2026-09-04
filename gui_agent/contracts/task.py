@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import NewType
 from uuid import uuid4
+
+from .observation import ObservationId
 
 TaskId = NewType("TaskId", str)
 
@@ -26,3 +29,20 @@ class TaskState(str, Enum):
     @property
     def is_terminal(self) -> bool:
         return self in {self.SUCCEEDED, self.FAILED, self.CANCELLED}
+
+
+@dataclass(frozen=True, slots=True)
+class PendingConfirmation:
+    """The exact user-facing question that paused a task."""
+
+    text: str
+    source_observation_id: ObservationId
+
+
+@dataclass(frozen=True, slots=True)
+class TaskStep:
+    """A small, ordered session event suitable for later audit rendering."""
+
+    sequence: int
+    detail: str
+    observation_id: ObservationId | None

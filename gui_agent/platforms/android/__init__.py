@@ -4,5 +4,14 @@
 
 from .adb_transport import AdbDevice, AdbError, AdbTransport
 from .backend import AndroidBackendError, AndroidDeviceBackend
+from .stability import UiStabilityResult, UiStabilityWaiter
 
-__all__ = ["AdbDevice", "AdbError", "AdbTransport", "AndroidBackendError", "AndroidDeviceBackend"]
+__all__ = [
+    "AdbDevice",
+    "AdbError",
+    "AdbTransport",
+    "AndroidBackendError",
+    "AndroidDeviceBackend",
+    "UiStabilityResult",
+    "UiStabilityWaiter",
+]
