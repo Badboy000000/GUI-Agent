@@ -57,6 +57,13 @@ P2 不扩展网页、桌面或其他设备平台。
   - 设备档案以只读 ADB 解析 Settings/HOME/前台包，并兼容 Android 14/OEM 的前台窗口输出，可用于后续模拟器与红米的差异对照。
   - 运行命令、真实模型前置条件与红米对照步骤见 [Android P3 端到端评测](docs/ANDROID_P3_EVALUATION.md)。
 
+- **P4 已完成并在真实设备上跑通（仅 Android）**：通用自主任务——给一条自然语言指令，Agent 在真机上自主完成多步任务。
+  - `python -m gui_agent.autonomous.android` 把任意指令、显式 ADB 设备、真实模型推理与 JSONL 审计串成一条运行路径；成功退出码为 0，失败为 1。
+  - 动作策略放行 click/long_press/drag/swipe/type/open/system_button/wait/terminate/ask_user，其余动作在任何设备输入前被拒绝；`open` 仅启动白名单内的应用包；坐标越界即拒绝，绝不钳位。
+  - 步数受 `--max-steps` 限制（默认 15）；`ask_user` 只暂停并以 `pending_confirmation` 呈现在报告中，绝不自动放行。
+  - 运行时键 `coordinate_scale` 选择模型坐标约定（`"thousand"` 为真实 MAI-UI 权重，`"pixels"` 为按原始截图像素作答的模型）；自主入口默认 `"pixels"`，已在智谱 glm 视觉模型上验证。
+  - 已在 emulator-5554 + 智谱 glm 上端到端跑通「打开设置 → 搜索 wifi → 终止」；运行前置条件、参数说明与已验证证据见 [Android 自主任务](docs/ANDROID_AUTONOMOUS_TASK.md)。
+
 ## 目标
 
 把「截图 + 指令 → 动作 JSON」的单点推理，扩展为能在真实设备上**自主完成完整任务**的 GUI Agent 系统。
