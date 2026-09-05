@@ -64,6 +64,12 @@ P2 不扩展网页、桌面或其他设备平台。
   - 运行时键 `coordinate_scale` 选择模型坐标约定（`"thousand"` 为真实 MAI-UI 权重，`"pixels"` 为按原始截图像素作答的模型）；自主入口默认 `"pixels"`，已在智谱 glm 视觉模型上验证。
   - 已在 emulator-5554 + 智谱 glm 上端到端跑通「打开设置 → 搜索 wifi → 终止」；运行前置条件、参数说明与已验证证据见 [Android 自主任务](docs/ANDROID_AUTONOMOUS_TASK.md)。
 
+- **P5 已完成并在双设备上验证（仅 Android）**：UI 树采集能力、坐标自标定与漂移检测。
+  - `AdbTransport.dump_ui_hierarchy()` + `parse_ui_tree` 产出扁平节点表（text/resource_id/class_name/content_desc/clickable/bounds/depth）；`AndroidDeviceBackend(capture_ui_tree=True)` 按步填充 `Observation.ui_tree`，采集失败降级为 None，审计观测事件带 `ui_tree_available`；因每步观测约增加 2–3s 延迟，默认关闭。
+  - `--coordinate-scale auto` 在任务开跑前做一次只读标定（截图 + uiautomator dump + 最多 4 次模型探针，零设备输入），实测模型坐标空间并采纳 pixels/thousand/显式系数；标定失败则任务拒绝启动、不写 report.json。
+  - 漂移检测常驻：坐标越出 [0,1] 首次即报带诊断的失败；滑动窗口内坐标全部落入千分可表达带同样判疑似漂移，fail-closed 收场，不自动重标定。
+  - 已在模拟器与红米真机（Xiaomi 23078RKD5C，Android 16，1220×2712）各跑一次 auto 标定任务，均标定为 pixels 且任务 succeeded；用法、报告字段与已验证证据见 [P5 坐标自标定](docs/P5_COORDINATE_CALIBRATION.md)。
+
 ## 目标
 
 把「截图 + 指令 → 动作 JSON」的单点推理，扩展为能在真实设备上**自主完成完整任务**的 GUI Agent 系统。
