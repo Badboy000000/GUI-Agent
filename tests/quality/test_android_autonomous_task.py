@@ -16,10 +16,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from PIL import Image
 
 from gui_agent.audit import load_replay
 from gui_agent.autonomous import AndroidTaskConfig, run_android_task
+from gui_agent.brains import CalibrationError, CalibrationResult
 from gui_agent.contracts import Observation, PlatformCommand
 from gui_agent.platforms.base import DeviceBackend
 
@@ -321,3 +323,115 @@ def test_ask_user_pauses_the_run_and_reports_the_prompt_without_device_input(
     assert report["pending_confirmation"] == prompt
     assert report["audit_jsonl_valid"] is True
     assert _executed_backend(fakes).executed == []
+
+
+def test_auto_coordinate_scale_consumes_the_calibration_result(tmp_path: Path) -> None:
+    captured_confs: list[dict[str, object]] = []
+
+    def calibrate_fn(backend, transport, probe_factory) -> CalibrationResult:
+        # The injected backend path has no real transport to offer.
+        assert transport is None
+        return CalibrationResult(
+            coordinate_scale="explicit",
+            scale_x=1.0,
+            scale_y=1.0,
+            samples=2,
+            detail="scripted calibration",
+        )
+
+    def predictor_factory(config: AndroidTaskConfig) -> ScriptedMAIPredictor:
+        captured_confs.append(dict(config.runtime_conf))
+        return ScriptedMAIPredictor([{"action": "terminate", "status": "success"}])
+
+    fakes = TaskFakes(tmp_path, actions=[], foregrounds=[_HOME_PACKAGE])
+    report = run_android_task(
+        _config(tmp_path, runtime_conf={"coordinate_scale": "auto"}),
+        backend_factory=fakes.backend_factory,
+        predictor_factory=predictor_factory,
+        calibrate_fn=calibrate_fn,
+    )
+
+    # The production predictor is constructed from the calibrated config, not
+    # the pre-calibration "auto" placeholder.
+    assert captured_confs == [
+        {"coordinate_scale": "explicit", "coordinate_scale_x": 1.0, "coordinate_scale_y": 1.0}
+    ]
+    assert report["calibration"] == {
+        "coordinate_scale": "explicit",
+        "scale_x": 1.0,
+        "scale_y": 1.0,
+        "samples": 2,
+        "detail": "scripted calibration",
+    }
+    assert report["state"] == "succeeded"
+
+
+def test_auto_coordinate_scale_reports_a_snapped_convention(tmp_path: Path) -> None:
+    captured_confs: list[dict[str, object]] = []
+
+    def calibrate_fn(backend, transport, probe_factory) -> CalibrationResult:
+        return CalibrationResult(
+            coordinate_scale="pixels",
+            scale_x=None,
+            scale_y=None,
+            samples=2,
+            detail="scripted calibration",
+        )
+
+    def predictor_factory(config: AndroidTaskConfig) -> ScriptedMAIPredictor:
+        captured_confs.append(dict(config.runtime_conf))
+        return ScriptedMAIPredictor([{"action": "terminate", "status": "success"}])
+
+    fakes = TaskFakes(tmp_path, actions=[], foregrounds=[_HOME_PACKAGE])
+    report = run_android_task(
+        _config(tmp_path, runtime_conf={"coordinate_scale": "auto"}),
+        backend_factory=fakes.backend_factory,
+        predictor_factory=predictor_factory,
+        calibrate_fn=calibrate_fn,
+    )
+
+    # A convention hit replaces "auto" without adding explicit coefficients.
+    assert captured_confs == [{"coordinate_scale": "pixels"}]
+    assert report["calibration"] == {
+        "coordinate_scale": "pixels",
+        "scale_x": None,
+        "scale_y": None,
+        "samples": 2,
+        "detail": "scripted calibration",
+    }
+
+
+def test_calibration_failure_refuses_to_start_and_writes_no_report(tmp_path: Path) -> None:
+    def failing_calibrate(backend, transport, probe_factory) -> CalibrationResult:
+        raise CalibrationError("scripted calibration failure")
+
+    fakes = TaskFakes(tmp_path, actions=[], foregrounds=[_HOME_PACKAGE])
+    config = _config(
+        tmp_path,
+        runtime_conf={"coordinate_scale": "auto"},
+        run_id="calibration-failure",
+    )
+
+    with pytest.raises(CalibrationError, match="scripted calibration failure"):
+        run_android_task(
+            config,
+            backend_factory=fakes.backend_factory,
+            predictor_factory=fakes.predictor_factory,
+            calibrate_fn=failing_calibrate,
+        )
+
+    # Fail-closed: the run refuses to start, so no report is ever written.
+    assert not (config.artifact_directory / "calibration-failure" / "report.json").exists()
+
+
+def test_auto_coordinate_scale_requires_a_real_transport_without_calibrate_fn(
+    tmp_path: Path,
+) -> None:
+    fakes = TaskFakes(tmp_path, actions=[], foregrounds=[_HOME_PACKAGE])
+
+    with pytest.raises(ValueError, match="auto"):
+        run_android_task(
+            _config(tmp_path, runtime_conf={"coordinate_scale": "auto"}),
+            backend_factory=fakes.backend_factory,
+            predictor_factory=fakes.predictor_factory,
+        )

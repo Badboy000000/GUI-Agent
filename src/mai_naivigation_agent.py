@@ -229,8 +229,10 @@ class MAIUINaivigationAgent(BaseAgent):
                 - top_p: Top-p sampling parameter (default: 1.0)
                 - max_tokens: Maximum tokens in response (default: 2048)
                 - coordinate_scale: coordinate convention the model answers in;
-                  "thousand" (default, MAI-UI's 0-999 range) or "pixels" (raw
-                  screenshot pixels, e.g. BigModel glm vision models)
+                  "thousand" (default, MAI-UI's 0-999 range), "pixels" (raw
+                  screenshot pixels, e.g. BigModel glm vision models), or
+                  "explicit" (a measured model-space extent; requires positive
+                  coordinate_scale_x/coordinate_scale_y entries)
             tools: Optional list of MCP tool definitions. Each tool should be a dict
                 with 'name', 'description', and 'parameters' keys.
         """
@@ -264,11 +266,23 @@ class MAIUINaivigationAgent(BaseAgent):
         self.history_n = self.runtime_conf["history_n"]
 
         coordinate_scale = self.runtime_conf.get("coordinate_scale", "thousand")
-        if coordinate_scale not in ("thousand", "pixels"):
+        if coordinate_scale not in ("thousand", "pixels", "explicit"):
             raise ValueError(
-                f"coordinate_scale must be 'thousand' or 'pixels', got {coordinate_scale!r}"
+                f"coordinate_scale must be 'thousand', 'pixels', or 'explicit', got {coordinate_scale!r}"
             )
         self.coordinate_scale = coordinate_scale
+        self._coordinate_scale_x = 0.0
+        self._coordinate_scale_y = 0.0
+        if coordinate_scale == "explicit":
+            scale_x = self.runtime_conf.get("coordinate_scale_x")
+            scale_y = self.runtime_conf.get("coordinate_scale_y")
+            for name, value in (("coordinate_scale_x", scale_x), ("coordinate_scale_y", scale_y)):
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                    raise ValueError(
+                        f"explicit coordinate_scale requires a positive {name}, got {value!r}"
+                    )
+            self._coordinate_scale_x = float(scale_x)
+            self._coordinate_scale_y = float(scale_y)
 
     @property
     def system_prompt(self) -> str:
@@ -290,6 +304,13 @@ class MAIUINaivigationAgent(BaseAgent):
         if self.coordinate_scale == "pixels" and step.screenshot is not None:
             width, height = step.screenshot.size
             return [int(point_x * width), int(point_y * height)]
+        if self.coordinate_scale == "explicit":
+            # Explicit extents are measured once at calibration time and stay
+            # fixed; they deliberately ignore each step's screenshot size.
+            return [
+                int(point_x * self._coordinate_scale_x),
+                int(point_y * self._coordinate_scale_y),
+            ]
         return [int(point_x * SCALE_FACTOR), int(point_y * SCALE_FACTOR)]
 
     @property
@@ -570,9 +591,12 @@ class MAIUINaivigationAgent(BaseAgent):
                 print(f"Raw response:\n{prediction}")
 
                 # Parse response, mapping the model's coordinate convention to
-                # [0, 1]; pixel-answering models are scaled by this screenshot's size.
+                # [0, 1]; pixel-answering models are scaled by this screenshot's
+                # size, explicit mode by the calibrated fixed extents.
                 if self.coordinate_scale == "pixels":
                     scale_x, scale_y = screenshot_pil.size
+                elif self.coordinate_scale == "explicit":
+                    scale_x, scale_y = self._coordinate_scale_x, self._coordinate_scale_y
                 else:
                     scale_x = scale_y = SCALE_FACTOR
                 parsed_response = parse_action_to_structure_output(prediction, scale_x, scale_y)

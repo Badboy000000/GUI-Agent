@@ -14,14 +14,20 @@ import argparse
 import json
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
 from gui_agent.actions import AndroidActionCompiler
 from gui_agent.audit import JsonlAuditRecorder, load_replay
-from gui_agent.brains import MAIUIBrainAdapter
+from gui_agent.brains import (
+    CalibrationResult,
+    CoordinateDriftMonitor,
+    MAIUIBrainAdapter,
+    calibrate_coordinate_scale,
+)
+from gui_agent.brains.coordinate_calibration import ProbePredictorFactory
 from gui_agent.contracts import Observation, ProposedAction, TaskState
 from gui_agent.evaluation.environment import load_mai_ui_environment
 from gui_agent.orchestration import TaskRunner
@@ -40,6 +46,10 @@ class AutonomousTaskPolicyError(RuntimeError):
 
 class _Predictor(Protocol):
     def predict(self, instruction: str, obs: dict[str, Any], **kwargs: Any) -> tuple[str, dict[str, Any]]: ...
+
+
+class _Brain(Protocol):
+    def decide(self, instruction: str, observation: Observation) -> ProposedAction: ...
 
 
 class GeneralActionPolicy:
@@ -67,7 +77,7 @@ class GeneralActionPolicy:
         }
     )
 
-    def __init__(self, brain: MAIUIBrainAdapter) -> None:
+    def __init__(self, brain: _Brain) -> None:
         self._brain = brain
 
     def decide(self, instruction: str, observation: Observation) -> ProposedAction:
@@ -143,6 +153,9 @@ class AndroidTaskConfig:
 
 BackendFactory = Callable[[AndroidTaskConfig], DeviceBackend]
 PredictorFactory = Callable[[AndroidTaskConfig], _Predictor]
+CalibrationFn = Callable[
+    [DeviceBackend, AdbTransport | None, ProbePredictorFactory], CalibrationResult
+]
 
 
 def run_android_task(
@@ -150,6 +163,7 @@ def run_android_task(
     *,
     backend_factory: BackendFactory | None = None,
     predictor_factory: PredictorFactory | None = None,
+    calibrate_fn: CalibrationFn | None = None,
 ) -> dict[str, object]:
     """Run one autonomous Android task and return a JSON-serializable report.
 
@@ -158,27 +172,39 @@ def run_android_task(
     predictor, and connects the existing ADB backend.  One run owns one
     backend, one predictor, and one JSONL audit trail.  A paused task
     (``ask_user``) is reported as-is; it is never auto-resolved.
+
+    ``coordinate_scale: "auto"`` first calibrates the model's coordinate
+    convention against the live UI tree and then starts the task with the
+    measured configuration.  Calibration needs a real ADB transport, so auto
+    is available on the production path only; injected-backend runs must
+    inject ``calibrate_fn`` as well.
     """
 
     if not config.llm_base_url.strip():
         raise ValueError("llm_base_url must not be empty when running a task")
     if not config.model_name.strip():
         raise ValueError("model_name must not be empty when running a task")
+    wants_auto = config.runtime_conf.get("coordinate_scale") == "auto"
+    if wants_auto and calibrate_fn is None and backend_factory is not None:
+        raise ValueError(
+            'coordinate_scale "auto" requires the production ADB path or an injected calibrate_fn'
+        )
     run_id = config.run_id or str(uuid4())
     run_directory = config.artifact_directory / run_id
     run_directory.mkdir(parents=True, exist_ok=False)
 
     device_profile: AndroidDeviceProfile | None = None
+    transport: AdbTransport | None = None
     if backend_factory is None:
         # Read-only preflight for the production path only; the injected
-        # factory seam must never start an adb process.
-        device_profile = discover_android_device_profile(
-            AdbTransport(
-                config.serial,
-                adb_path=config.adb_path,
-                timeout_seconds=config.adb_timeout_seconds,
-            )
+        # factory seam must never start an adb process.  The same transport
+        # instance backs calibration and the runtime backend.
+        transport = AdbTransport(
+            config.serial,
+            adb_path=config.adb_path,
+            timeout_seconds=config.adb_timeout_seconds,
         )
+        device_profile = discover_android_device_profile(transport)
     app_packages = (
         {"Settings": device_profile.settings_package} | dict(config.app_packages)
         if device_profile is not None
@@ -186,11 +212,32 @@ def run_android_task(
     )
 
     backend = (
-        backend_factory(config) if backend_factory is not None else _create_backend(config, run_directory)
+        backend_factory(config)
+        if backend_factory is not None
+        else _create_backend(config, run_directory, transport)
     )
     try:
+        effective_config = config
+        calibration_report: dict[str, object] | None = None
+        if wants_auto:
+            calibration = _run_calibration(config, backend, transport, calibrate_fn)
+            merged_conf = dict(config.runtime_conf)
+            merged_conf["coordinate_scale"] = calibration.coordinate_scale
+            if calibration.coordinate_scale == "explicit":
+                merged_conf["coordinate_scale_x"] = calibration.scale_x
+                merged_conf["coordinate_scale_y"] = calibration.scale_y
+            effective_config = replace(config, runtime_conf=merged_conf)
+            calibration_report = {
+                "coordinate_scale": calibration.coordinate_scale,
+                "scale_x": calibration.scale_x,
+                "scale_y": calibration.scale_y,
+                "samples": calibration.samples,
+                "detail": calibration.detail,
+            }
         predictor = (
-            predictor_factory(config) if predictor_factory is not None else _create_predictor(config)
+            predictor_factory(effective_config)
+            if predictor_factory is not None
+            else _create_predictor(effective_config)
         )
         verifier = (
             ForegroundPackageVerifier(config.expected_foreground_package)
@@ -200,7 +247,7 @@ def run_android_task(
         recorder = JsonlAuditRecorder(run_directory / "audit.jsonl")
         runner = TaskRunner(
             backend,
-            GeneralActionPolicy(MAIUIBrainAdapter(predictor)),
+            GeneralActionPolicy(CoordinateDriftMonitor(MAIUIBrainAdapter(predictor))),
             AndroidActionCompiler(app_packages=app_packages),
             verifier,
             max_steps=config.max_steps,
@@ -240,6 +287,7 @@ def run_android_task(
         ),
         "audit_jsonl_valid": audit_jsonl_valid,
         "audit_path": str(audit_path),
+        "calibration": calibration_report,
         "success": result.state is TaskState.SUCCEEDED,
     }
     report_path = run_directory / "report.json"
@@ -261,16 +309,32 @@ def _profile_report(profile: AndroidDeviceProfile | None) -> dict[str, object]:
     }
 
 
-def _create_backend(config: AndroidTaskConfig, run_directory: Path) -> AndroidDeviceBackend:
-    transport = AdbTransport(
-        config.serial,
-        adb_path=config.adb_path,
-        timeout_seconds=config.adb_timeout_seconds,
-    )
+def _run_calibration(
+    config: AndroidTaskConfig,
+    backend: DeviceBackend,
+    transport: AdbTransport | None,
+    calibrate_fn: CalibrationFn | None,
+) -> CalibrationResult:
+    """Calibrate with the real implementation or the injected CI seam."""
+
+    def probe_factory(runtime_conf_override: Mapping[str, Any]) -> _Predictor:
+        merged = dict(config.runtime_conf)
+        merged.update(runtime_conf_override)
+        return _create_predictor(config, merged)
+
+    calibrate = calibrate_fn if calibrate_fn is not None else calibrate_coordinate_scale
+    return calibrate(backend, transport, probe_factory)
+
+
+def _create_backend(
+    config: AndroidTaskConfig, run_directory: Path, transport: AdbTransport
+) -> AndroidDeviceBackend:
     return AndroidDeviceBackend(transport, screenshot_directory=run_directory / "screenshots")
 
 
-def _create_predictor(config: AndroidTaskConfig) -> _Predictor:
+def _create_predictor(
+    config: AndroidTaskConfig, runtime_conf: Mapping[str, Any] | None = None
+) -> _Predictor:
     """Load the project's upstream-style MAI-UI source without a package refactor."""
 
     source_directory = Path(__file__).resolve().parents[2] / "src"
@@ -282,7 +346,7 @@ def _create_predictor(config: AndroidTaskConfig) -> _Predictor:
     return MAIUINaivigationAgent(
         config.llm_base_url,
         config.model_name,
-        runtime_conf=dict(config.runtime_conf),
+        runtime_conf=dict(runtime_conf) if runtime_conf is not None else dict(config.runtime_conf),
         api_key=config.api_key,
     )
 
@@ -312,6 +376,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ADB executable path; use this when platform-tools is not on PATH",
     )
     parser.add_argument("--max-steps", type=int, default=15)
+    parser.add_argument(
+        "--coordinate-scale",
+        choices=["pixels", "thousand", "auto"],
+        default=None,
+        help="model coordinate convention; 'auto' calibrates it against the live UI tree before the run (default: pixels)",
+    )
     parser.add_argument("--artifact-directory", type=Path, default=Path("artifacts/android-tasks"))
     parser.add_argument(
         "--expect-package",
@@ -332,6 +402,9 @@ def main(argv: list[str] | None = None) -> int:
         api_key=environment.api_key,
         adb_path=args.adb_path,
         max_steps=args.max_steps,
+        runtime_conf={
+            "coordinate_scale": args.coordinate_scale if args.coordinate_scale else "pixels"
+        },
         expected_foreground_package=args.expect_package,
     )
     # Report endpoint/model only; the API key stays in the process and is never printed.

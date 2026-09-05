@@ -754,6 +754,92 @@ def test_thousand_mode_history_keeps_thousand_scale():
     assert '"coordinate":[499,499]' in history[0]
 
 
+@pytest.mark.parametrize(
+    "runtime_conf",
+    [
+        {"coordinate_scale": "explicit"},
+        {"coordinate_scale": "explicit", "coordinate_scale_x": 1080},
+        {"coordinate_scale": "explicit", "coordinate_scale_x": 0, "coordinate_scale_y": 2400},
+        {"coordinate_scale": "explicit", "coordinate_scale_x": 1080, "coordinate_scale_y": -1},
+        {"coordinate_scale": "explicit", "coordinate_scale_x": 1080, "coordinate_scale_y": "2400"},
+    ],
+)
+def test_explicit_mode_requires_positive_measured_extents(runtime_conf):
+    with patch('mai_naivigation_agent.OpenAI'):
+        with pytest.raises(ValueError, match="coordinate_scale"):
+            MAIUINaivigationAgent(
+                llm_base_url="http://test.com",
+                model_name="test-model",
+                runtime_conf=runtime_conf,
+            )
+
+
+def test_explicit_mode_predict_divides_by_the_calibrated_extents():
+    """A model measured at a 1080x2400 extent answers raw pixels of that space."""
+
+    with patch('mai_naivigation_agent.OpenAI'):
+        agent = MAIUINaivigationAgent(
+            llm_base_url="http://test.com",
+            model_name="test-model",
+            runtime_conf={
+                "coordinate_scale": "explicit",
+                "coordinate_scale_x": 1080,
+                "coordinate_scale_y": 2400,
+            },
+        )
+        agent.traj_memory = TrajMemory(task_goal="", task_id="test_task")
+        raw = (
+            '<tool_call>{"name": "mobile_use", "arguments": '
+            '{"action": "click", "coordinate": [540, 1200]}}</tool_call>'
+        )
+        message = MagicMock(content=raw)
+        agent.llm.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=message)]
+        )
+
+        # The screenshot size must be irrelevant in explicit mode.
+        image = Image.new("RGB", (100, 200))
+        _, action = agent.predict(
+            "tap the middle", {"screenshot": image, "accessibility_tree": None}
+        )
+
+    assert action["coordinate"] == [0.5, 0.5]
+
+
+def test_explicit_mode_history_echoes_the_calibrated_extents():
+    """History replay must reuse the fixed calibrated extents, not screenshot size."""
+
+    with patch('mai_naivigation_agent.OpenAI'):
+        agent = MAIUINaivigationAgent(
+            llm_base_url="http://test.com",
+            model_name="test-model",
+            runtime_conf={
+                "coordinate_scale": "explicit",
+                "coordinate_scale_x": 500,
+                "coordinate_scale_y": 1000,
+            },
+        )
+        agent.traj_memory = TrajMemory(task_goal="", task_id="test_task")
+        agent.traj_memory.steps.append(
+            TrajStep(
+                screenshot=Image.new("RGB", (1080, 2400)),
+                accessibility_tree=None,
+                prediction="raw",
+                action={"action": "click", "coordinate": [0.5, 0.5]},
+                conclusion="",
+                thought="tapped center",
+                step_index=0,
+                agent_type="MAIMobileAgent",
+                model_name="test-model",
+                structured_action={"action_json": {"action": "click", "coordinate": [0.5, 0.5]}},
+            )
+        )
+
+        history = agent.history_responses
+
+    assert '"coordinate":[250,500]' in history[0]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
