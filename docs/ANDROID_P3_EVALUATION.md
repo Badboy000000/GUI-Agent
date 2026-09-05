@@ -8,17 +8,20 @@ JSONL 审计回放；没有另建模型服务或使用假模型代替生产推�
 
 - 已明确选择一台状态为 `device` 的 Android 模拟器或真机。
 - 可执行 `adb`，并已授权该设备。
-- 已有可访问的 OpenAI 兼容 MAI-UI 推理地址和模型名。
+- 仓库根目录有 git-ignored 的 `.env`，提供三个值：`MAI_UI_BASE_URL`、
+  `MAI_UI_MODEL_NAME`、`BIGMODEL_API_KEY`（远端托管服务如智谱 BigModel 需要真实
+  Key；本地 vLLM 类服务可填占位符）。`.env` 不随仓库提交，Key 只在进程内使用，
+  绝不打印、写日志或进入报告/审计产物。
 - 设备已解锁，且 Settings、HOME 和前台应用都可由只读 ADB 预检识别。
 
-运行入口需要设备序列号，绝不会选择默认设备：
+运行入口需要设备序列号，绝不会选择默认设备。模型连接默认从仓库根目录 `.env`
+读取（可用 `--env-file` 指定别的文件，或用 `--llm-base-url` / `--model-name`
+覆盖；进程环境变量优先于 `.env`）：
 
 ```powershell
 python -m gui_agent.evaluation.android `
   --serial emulator-5554 `
   --adb-path C:\\Users\\lwj\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe `
-  --llm-base-url http://127.0.0.1:8000/v1 `
-  --model-name your-mai-ui-model `
   --artifact-directory artifacts/android-p3/emulator
 ```
 
@@ -53,8 +56,6 @@ python -m gui_agent.evaluation.android `
 python -m gui_agent.evaluation.android `
   --serial REDMI_SERIAL `
   --adb-path C:\\Users\\lwj\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe `
-  --llm-base-url http://127.0.0.1:8000/v1 `
-  --model-name your-mai-ui-model `
   --artifact-directory artifacts/android-p3/redmi `
   --baseline-report artifacts/android-p3/emulator/<run-id>/report.json
 ```

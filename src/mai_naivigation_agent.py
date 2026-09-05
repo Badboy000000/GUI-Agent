@@ -73,26 +73,29 @@ def parse_tagged_text(text: str) -> Dict[str, Any]:
     Raises:
         ValueError: If tool_call content is not valid JSON.
     """
-    # Handle thinking model output format (uses </think> instead of </thinking>)
+    # Handle reasoning-model output that closes with a lone </think> tag and
+    # no opening <thinking>. Normalize it so the independent tag match below
+    # still captures the reasoning.
     if "</think>" in text and "</thinking>" not in text:
         text = text.replace("</think>", "</thinking>")
-        text = "<thinking>" + text
-
-    # Define regex pattern with non-greedy matching
-    pattern = r"<thinking>(.*?)</thinking>.*?<tool_call>(.*?)</tool_call>"
+        if "<thinking>" not in text:
+            text = "<thinking>" + text
 
     result: Dict[str, Any] = {
         "thinking": None,
         "tool_call": None,
     }
 
-    # Use re.DOTALL to match newlines
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
-        result = {
-            "thinking": match.group(1).strip().strip('"'),
-            "tool_call": match.group(2).strip().strip('"'),
-        }
+    # Extract thinking and tool_call independently. Some compliant models emit
+    # their reasoning as plain prose without <thinking> tags; that must not
+    # prevent a perfectly valid <tool_call> from being parsed.
+    thinking_match = re.search(r"<thinking>(.*?)</thinking>", text, re.DOTALL)
+    if thinking_match:
+        result["thinking"] = thinking_match.group(1).strip().strip('"')
+
+    tool_match = re.search(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL)
+    if tool_match:
+        result["tool_call"] = tool_match.group(1).strip().strip('"')
 
     # Parse tool_call as JSON
     if result["tool_call"]:
@@ -201,13 +204,17 @@ class MAIUINaivigationAgent(BaseAgent):
         model_name: str,
         runtime_conf: Optional[Dict[str, Any]] = None,
         mcp_tools: Optional[List[Dict[str, Any]]] = None,
+        api_key: str = "empty",
     ):
         """
         Initialize the MAIMobileAgent.
 
         Args:
             llm_base_url: Base URL for the LLM API endpoint.
-            model_name: Name of the model to use.
+            model_name: Name of the model to use for predictions.
+            api_key: API key for the OpenAI-compatible endpoint. Remote managed
+                services (e.g. BigModel) require a real key; local vLLM-style
+                servers accept any placeholder. Never hardcode a real secret here.
             runtime_conf: Optional configuration dictionary with keys:
                 - history_n: Number of history images to include (default: 3)
                 - max_pixels: Maximum pixels for image processing
@@ -238,7 +245,7 @@ class MAIUINaivigationAgent(BaseAgent):
         self.model_name = model_name
         self.llm = OpenAI(
             base_url=self.llm_base_url,
-            api_key="empty",
+            api_key=api_key,
         )
 
         # Extract frequently used config values

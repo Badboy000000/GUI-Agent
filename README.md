@@ -49,8 +49,9 @@
 
 P2 不扩展网页、桌面或其他设备平台。
 
-- **P3 已实现（仅 Android，真实跑分待设备/模型前置条件）**：
+- **P3 已完成并在真实模型上跑通（仅 Android）**：
   - `python -m gui_agent.evaluation.android` 将既有 MAI-UI 真实推理、`TaskRunner`、显式 ADB 设备和 JSONL 审计回放串成一条运行路径。
+  - 模型连接由 git-ignored 的 `.env`（`MAI_UI_BASE_URL` / `MAI_UI_MODEL_NAME` / `BIGMODEL_API_KEY`）驱动，客户端模型无关：已用智谱 BigModel 远端 OpenAI 兼容视觉模型在 `emulator-5554` 上实测 4/4 场景通过；本地 vLLM 自部署 MAI-UI 权重时只改 `.env` 即可。
   - 提供打开设置、返回主屏、稳定等待和人工接管四个低风险任务；每项动作有精确白名单，未允许的模型动作在发送到设备前失败。
   - 每次运行写入独立 `report.json`：场景成功率、原始任务状态、失败原因、稳定超时、人工接管、设备档案和审计回放结论均可复查。
   - 设备档案以只读 ADB 解析 Settings/HOME/前台包，并兼容 Android 14/OEM 的前台窗口输出，可用于后续模拟器与红米的差异对照。

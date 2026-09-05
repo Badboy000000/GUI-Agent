@@ -573,6 +573,61 @@ class TestBuildMessages:
             pytest.fail(f"Invalid base64 encoding: {e}")
 
 
+def test_parse_tool_call_without_thinking_tag():
+    """A valid <tool_call> must parse even when the model omits <thinking> tags.
+
+    Real VLM endpoints (e.g. glm-5.3-flash) sometimes emit reasoning as plain
+    prose and only wrap the tool call. Coupling the two tags made every such
+    response collapse to ``{"action": None}``.
+    """
+
+    from mai_naivigation_agent import parse_action_to_structure_output, parse_tagged_text
+
+    text = (
+        "The task is to open Settings. I will use the open action.\n"
+        '<tool_call>\n{"name": "mobile_use", "arguments": '
+        '{"action": "open", "text": "Settings"}}\n</tool_call>'
+    )
+
+    result = parse_tagged_text(text)
+    assert result["thinking"] is None
+    assert result["tool_call"]["arguments"] == {"action": "open", "text": "Settings"}
+
+    structured = parse_action_to_structure_output(text)
+    assert structured["action_json"] == {"action": "open", "text": "Settings"}
+
+
+def test_parse_tool_call_with_thinking_tag():
+    """Both tags present: thinking and action are both captured."""
+
+    from mai_naivigation_agent import parse_action_to_structure_output
+
+    text = (
+        "<thinking>I should wait for the screen to settle.</thinking>\n"
+        '<tool_call>{"name": "mobile_use", "arguments": {"action": "wait"}}</tool_call>'
+    )
+
+    structured = parse_action_to_structure_output(text)
+    assert structured["action_json"] == {"action": "wait"}
+    assert "wait" in structured["thinking"]
+
+
+def test_parse_tool_call_with_lone_think_close_tag():
+    """Reasoning models that close reasoning with a bare </think> still parse."""
+
+    from mai_naivigation_agent import parse_action_to_structure_output
+
+    text = (
+        "Let me reason about the home button.</think>"
+        '<tool_call>{"name": "mobile_use", "arguments": '
+        '{"action": "system_button", "button": "home"}}</tool_call>'
+    )
+
+    structured = parse_action_to_structure_output(text)
+    assert structured["action_json"] == {"action": "system_button", "button": "home"}
+    assert structured["thinking"] is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

@@ -25,6 +25,7 @@ from gui_agent.actions import AndroidActionCompiler
 from gui_agent.audit import AuditEventKind, JsonlAuditRecorder, load_replay
 from gui_agent.brains import MAIUIBrainAdapter
 from gui_agent.contracts import Observation, ProposedAction, TaskState
+from gui_agent.evaluation.environment import load_mai_ui_environment
 from gui_agent.orchestration import TaskRunner
 from gui_agent.platforms.android import (
     AdbTransport,
@@ -52,6 +53,7 @@ class AndroidEvaluationConfig:
     llm_base_url: str
     model_name: str
     artifact_directory: Path | str
+    api_key: str = "empty"
     home_package: str | None = None
     settings_package: str = "com.android.settings"
     max_steps: int = 4
@@ -97,19 +99,29 @@ class _EvaluationTask:
 
         if self.name == "settings":
             return (
-                proposal.name == "open"
-                and dict(proposal.arguments) == {"text": "Settings"}
-            ) or _is_success_termination(proposal)
+                (
+                    proposal.name == "open"
+                    and dict(proposal.arguments) == {"text": "Settings"}
+                )
+                or _is_noop_wait(proposal)
+                or _is_success_termination(proposal)
+            )
         if self.name == "home":
             return (
-                proposal.name == "system_button"
-                and dict(proposal.arguments) == {"button": "home"}
-            ) or _is_success_termination(proposal)
+                (
+                    proposal.name == "system_button"
+                    and dict(proposal.arguments) == {"button": "home"}
+                )
+                or _is_noop_wait(proposal)
+                or _is_success_termination(proposal)
+            )
         if self.name == "wait":
             return (proposal.name == "wait" and not proposal.arguments) or _is_success_termination(
                 proposal
             )
         if self.name == "takeover":
+            # Deliberately strict: takeover must only pause for a human. It does
+            # not even admit a benign wait, so a model cannot stall the scenario.
             return (
                 proposal.name == "ask_user"
                 and set(proposal.arguments) == {"text"}
@@ -121,6 +133,17 @@ class _EvaluationTask:
 
 def _is_success_termination(proposal: ProposedAction) -> bool:
     return proposal.name == "terminate" and dict(proposal.arguments) == {"status": "success"}
+
+
+def _is_noop_wait(proposal: ProposedAction) -> bool:
+    """A bare ``wait`` performs no device input; it only re-observes a frame later.
+
+    After launching an app the model may need one stable frame before it is
+    willing to terminate. Admitting wait lets the closed loop settle naturally
+    while the action whitelist still blocks every input-bearing action.
+    """
+
+    return proposal.name == "wait" and not proposal.arguments
 
 
 class _RestrictedBrain:
@@ -572,11 +595,13 @@ def _create_mai_ui_predictor(
             config.llm_base_url,
             config.model_name,
             runtime_conf=dict(config.runtime_conf),
+            api_key=config.api_key,
         )
     return navigation_agent(
         config.llm_base_url,
         config.model_name,
         runtime_conf=dict(config.runtime_conf),
+        api_key=config.api_key,
     )
 
 
@@ -596,8 +621,19 @@ def _load_existing_mai_ui():
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Android P3 MAI-UI evaluation on one explicit device")
     parser.add_argument("--serial", required=True, help="explicit adb serial for the emulator or device")
-    parser.add_argument("--llm-base-url", required=True, help="existing OpenAI-compatible MAI-UI endpoint")
-    parser.add_argument("--model-name", required=True, help="model name accepted by the MAI-UI endpoint")
+    parser.add_argument(
+        "--llm-base-url",
+        help="OpenAI-compatible MAI-UI endpoint; defaults to MAI_UI_BASE_URL from .env",
+    )
+    parser.add_argument(
+        "--model-name",
+        help="model name accepted by the MAI-UI endpoint; defaults to MAI_UI_MODEL_NAME from .env",
+    )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="dotenv file with MAI_UI_BASE_URL/MAI_UI_MODEL_NAME/BIGMODEL_API_KEY (default: repo-root .env)",
+    )
     parser.add_argument("--artifact-directory", type=Path, default=Path("artifacts/android-p3"))
     parser.add_argument(
         "--adb-path",
@@ -620,16 +656,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    environment = load_mai_ui_environment(args.env_file)
     config = AndroidEvaluationConfig(
         serial=args.serial,
-        llm_base_url=args.llm_base_url,
-        model_name=args.model_name,
+        llm_base_url=args.llm_base_url or environment.base_url,
+        model_name=args.model_name or environment.model_name,
+        api_key=environment.api_key,
         artifact_directory=args.artifact_directory,
         adb_path=args.adb_path,
         home_package=args.home_package,
         settings_package=args.settings_package,
         max_steps=args.max_steps,
         baseline_report_path=args.baseline_report,
+    )
+    # Report endpoint/model only; the API key stays in the process and is never printed.
+    print(
+        f"MAI-UI endpoint: {config.llm_base_url} model={config.model_name} device={config.serial}",
+        file=sys.stderr,
     )
     print(json.dumps(run_android_evaluation(config), ensure_ascii=False, indent=2))
     return 0

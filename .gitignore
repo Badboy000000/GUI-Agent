@@ -75,6 +75,9 @@ venv.bak/
 *.log
 logs/
 
+# Local evaluation artifacts (screenshots, audit JSONL, P3 reports)
+artifacts/
+
 # Local configuration
 .env.local
 config.local.py
