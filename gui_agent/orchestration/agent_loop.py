@@ -249,6 +249,7 @@ class TaskRunner:
                 "screen_height": observation.screen_height,
                 "foreground_app": observation.foreground_app,
                 "screenshot_path": observation.screenshot_path,
+                "ui_tree_available": observation.ui_tree is not None,
             },
         )
 

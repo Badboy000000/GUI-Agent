@@ -177,3 +177,61 @@ def test_activity_resolution_rejects_ambiguous_or_unavailable_output() -> None:
 
     assert device.settings_package() is None
     assert device.home_package() is None
+
+
+UI_XML = (
+    b"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>"
+    b'<hierarchy rotation="0"><node index="0" text="" resource-id="" '
+    b'class="android.widget.FrameLayout" package="com.demo" content-desc="" '
+    b'clickable="false" bounds="[0,0][1080,2400]"/></hierarchy>'
+)
+
+
+def test_dump_ui_hierarchy_dumps_reads_and_removes_a_unique_device_file() -> None:
+    runner = RecordingRunner([result(b""), result(UI_XML), result(b"")] * 2)
+    device = AdbTransport("emulator-5554", runner=runner)
+
+    first = device.dump_ui_hierarchy()
+    second = device.dump_ui_hierarchy()
+
+    assert first == UI_XML.decode("utf-8")
+    assert second == first
+    dump_call, cat_call, rm_call, second_dump_call = (
+        runner.calls[0],
+        runner.calls[1],
+        runner.calls[2],
+        runner.calls[3],
+    )
+    device_path = dump_call[-1]
+    assert dump_call[:6] == ["adb", "-s", "emulator-5554", "shell", "uiautomator", "dump"]
+    assert device_path.startswith("/data/local/tmp/gui_agent_ui_")
+    assert device_path.endswith(".xml")
+    assert cat_call == ["adb", "-s", "emulator-5554", "exec-out", "cat", device_path]
+    assert rm_call == ["adb", "-s", "emulator-5554", "shell", "rm", "-f", device_path]
+    assert second_dump_call[-1] != device_path
+
+
+def test_dump_ui_hierarchy_removes_the_device_file_even_when_the_read_fails() -> None:
+    calls: list[list[str]] = []
+
+    def failing_cat_runner(args, *, capture_output, timeout, check):
+        calls.append(list(args))
+        if "cat" in args:
+            raise CalledProcessError(1, args)
+        return CompletedProcess(args, 0, b"", b"")
+
+    with pytest.raises(AdbError):
+        AdbTransport("emulator-5554", runner=failing_cat_runner).dump_ui_hierarchy()
+
+    assert calls[-1] == ["adb", "-s", "emulator-5554", "shell", "rm", "-f", calls[0][-1]]
+
+
+@pytest.mark.parametrize("payload", [b"", b"null root node"])
+def test_dump_ui_hierarchy_rejects_a_non_hierarchy_payload(payload: bytes) -> None:
+    runner = RecordingRunner([result(b""), result(payload), result(b"")])
+    device = AdbTransport("emulator-5554", runner=runner)
+
+    with pytest.raises(AdbError, match="invalid UI hierarchy"):
+        device.dump_ui_hierarchy()
+
+    assert runner.calls[-1][-3:] == ["rm", "-f", runner.calls[0][-1]]

@@ -14,6 +14,7 @@ import re
 from subprocess import CompletedProcess
 import subprocess
 from typing import Protocol, Sequence
+from uuid import uuid4
 
 
 class AdbError(RuntimeError):
@@ -126,6 +127,28 @@ class AdbTransport:
         if not image.startswith(b"\x89PNG\r\n\x1a\n"):
             raise AdbError("ADB returned an invalid screenshot payload")
         return image
+
+    def dump_ui_hierarchy(self) -> str:
+        """Dump the current UI hierarchy via uiautomator and return the raw XML.
+
+        The dump is written to a unique device path per call so concurrent
+        captures cannot clobber each other, read back through ``exec-out``,
+        and removed afterwards; a cleanup failure never masks the result.
+        """
+
+        device_path = f"/data/local/tmp/gui_agent_ui_{uuid4().hex}.xml"
+        self.run("shell", "uiautomator", "dump", device_path)
+        try:
+            payload = self.run("exec-out", "cat", device_path).stdout
+        finally:
+            try:
+                self.run("shell", "rm", "-f", device_path)
+            except AdbError:
+                pass
+        xml_text = payload.decode("utf-8", errors="replace")
+        if not xml_text.strip() or "<hierarchy" not in xml_text:
+            raise AdbError("ADB returned an invalid UI hierarchy payload")
+        return xml_text
 
     def screen_size(self) -> tuple[int, int]:
         output = self.run("shell", "wm", "size").stdout.decode("utf-8", errors="replace")

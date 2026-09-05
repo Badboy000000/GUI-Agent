@@ -10,6 +10,7 @@ from .device_profile import (
     discover_android_device_profile,
 )
 from .stability import UiStabilityResult, UiStabilityWaiter
+from .ui_tree import UiTreeError, find_unique_text_node, parse_ui_tree
 
 __all__ = [
     "AdbDevice",
@@ -21,5 +22,8 @@ __all__ = [
     "AndroidDeviceProfileError",
     "UiStabilityResult",
     "UiStabilityWaiter",
+    "UiTreeError",
     "discover_android_device_profile",
+    "find_unique_text_node",
+    "parse_ui_tree",
 ]

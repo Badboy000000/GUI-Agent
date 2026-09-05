@@ -12,6 +12,7 @@ from gui_agent.contracts import Observation, PlatformCommand
 from gui_agent.platforms.base import DeviceBackend
 
 from .adb_transport import AdbError, AdbTransport
+from .ui_tree import UiTreeError, parse_ui_tree
 
 
 class AndroidBackendError(RuntimeError):
@@ -28,9 +29,16 @@ class AndroidDeviceBackend(DeviceBackend):
 
     _SUPPORTED_COMMANDS = {"tap", "swipe", "text", "launch", "system_key"}
 
-    def __init__(self, transport: AdbTransport, *, screenshot_directory: Path) -> None:
+    def __init__(
+        self,
+        transport: AdbTransport,
+        *,
+        screenshot_directory: Path,
+        capture_ui_tree: bool = False,
+    ) -> None:
         self._transport = transport
         self._screenshot_directory = screenshot_directory
+        self._capture_ui_tree = capture_ui_tree
         self._sequence = 0
         self._closed = False
 
@@ -62,9 +70,24 @@ class AndroidDeviceBackend(DeviceBackend):
             screen_height=height,
             screenshot_path=str(screenshot_path),
             foreground_app=foreground_app,
+            ui_tree=self._observe_ui_tree(),
         )
         self._sequence += 1
         return observation
+
+    def _observe_ui_tree(self) -> dict[str, Any] | None:
+        """Capture the UI hierarchy when enabled, degrading to None on failure.
+
+        The screenshot remains the primary observation output, so a dump or
+        parse failure must never block it.
+        """
+
+        if not self._capture_ui_tree:
+            return None
+        try:
+            return parse_ui_tree(self._transport.dump_ui_hierarchy())
+        except (AdbError, UiTreeError):
+            return None
 
     def execute(self, command: PlatformCommand) -> None:
         self._assert_open()
