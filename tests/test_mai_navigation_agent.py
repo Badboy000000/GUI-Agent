@@ -628,6 +628,132 @@ def test_parse_tool_call_with_lone_think_close_tag():
     assert structured["thinking"] is not None
 
 
+def test_parse_action_defaults_to_thousand_scale():
+    """Without explicit scales, coordinates keep the MAI-UI 0-999 convention."""
+
+    from mai_naivigation_agent import parse_action_to_structure_output
+
+    text = (
+        '<tool_call>{"name": "mobile_use", "arguments": '
+        '{"action": "click", "coordinate": [500, 999]}}</tool_call>'
+    )
+
+    structured = parse_action_to_structure_output(text)
+    x, y = structured["action_json"]["coordinate"]
+    assert x == pytest.approx(500 / 999)
+    assert y == pytest.approx(1.0)
+
+
+def test_parse_action_pixel_scale_divides_by_image_size():
+    """Pixel-answering models (e.g. BigModel glm) normalize by screenshot size."""
+
+    from mai_naivigation_agent import parse_action_to_structure_output
+
+    text = (
+        '<tool_call>{"name": "mobile_use", "arguments": '
+        '{"action": "click", "coordinate": [540, 1200]}}</tool_call>'
+    )
+
+    structured = parse_action_to_structure_output(text, 1080, 2400)
+    assert structured["action_json"]["coordinate"] == [0.5, 0.5]
+
+
+def test_agent_rejects_unknown_coordinate_scale():
+    with patch('mai_naivigation_agent.OpenAI'):
+        with pytest.raises(ValueError, match="coordinate_scale"):
+            MAIUINaivigationAgent(
+                llm_base_url="http://test.com",
+                model_name="test-model",
+                runtime_conf={"coordinate_scale": "bogus"},
+            )
+
+
+def test_pixels_mode_predict_normalizes_by_screenshot_size():
+    """End-to-end: a pixel-space model answer becomes a [0, 1] proposal."""
+
+    with patch('mai_naivigation_agent.OpenAI'):
+        agent = MAIUINaivigationAgent(
+            llm_base_url="http://test.com",
+            model_name="test-model",
+            runtime_conf={"coordinate_scale": "pixels"},
+        )
+        agent.traj_memory = TrajMemory(task_goal="", task_id="test_task")
+        raw = (
+            '<tool_call>{"name": "mobile_use", "arguments": '
+            '{"action": "click", "coordinate": [540, 1200]}}</tool_call>'
+        )
+        message = MagicMock(content=raw)
+        agent.llm.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=message)]
+        )
+
+        image = Image.new("RGB", (1080, 2400))
+        _, action = agent.predict(
+            "tap the middle", {"screenshot": image, "accessibility_tree": None}
+        )
+
+    assert action["coordinate"] == [0.5, 0.5]
+
+
+def test_pixels_mode_history_echoes_pixel_coordinates():
+    """History fed back to the model must use the same convention the model speaks."""
+
+    with patch('mai_naivigation_agent.OpenAI'):
+        agent = MAIUINaivigationAgent(
+            llm_base_url="http://test.com",
+            model_name="test-model",
+            runtime_conf={"coordinate_scale": "pixels"},
+        )
+        agent.traj_memory = TrajMemory(task_goal="", task_id="test_task")
+        agent.traj_memory.steps.append(
+            TrajStep(
+                screenshot=Image.new("RGB", (1080, 2400)),
+                accessibility_tree=None,
+                prediction="raw",
+                action={"action": "click", "coordinate": [0.5, 0.5]},
+                conclusion="",
+                thought="tapped center",
+                step_index=0,
+                agent_type="MAIMobileAgent",
+                model_name="test-model",
+                structured_action={"action_json": {"action": "click", "coordinate": [0.5, 0.5]}},
+            )
+        )
+
+        history = agent.history_responses
+
+    assert '"coordinate":[540,1200]' in history[0]
+
+
+def test_thousand_mode_history_keeps_thousand_scale():
+    """Default deployments (real MAI-UI weights) keep the 0-999 history echo."""
+
+    with patch('mai_naivigation_agent.OpenAI'):
+        agent = MAIUINaivigationAgent(
+            llm_base_url="http://test.com",
+            model_name="test-model",
+        )
+        agent.traj_memory = TrajMemory(task_goal="", task_id="test_task")
+        agent.traj_memory.steps.append(
+            TrajStep(
+                screenshot=Image.new("RGB", (1080, 2400)),
+                accessibility_tree=None,
+                prediction="raw",
+                action={"action": "click", "coordinate": [0.5, 0.5]},
+                conclusion="",
+                thought="tapped center",
+                step_index=0,
+                agent_type="MAIMobileAgent",
+                model_name="test-model",
+                structured_action={"action_json": {"action": "click", "coordinate": [0.5, 0.5]}},
+            )
+        )
+
+        history = agent.history_responses
+
+    assert '"coordinate":[499,499]' in history[0]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

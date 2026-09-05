@@ -107,12 +107,17 @@ def parse_tagged_text(text: str) -> Dict[str, Any]:
     return result
 
 
-def parse_action_to_structure_output(text: str) -> Dict[str, Any]:
+def parse_action_to_structure_output(
+    text: str, scale_x: float = SCALE_FACTOR, scale_y: float = SCALE_FACTOR
+) -> Dict[str, Any]:
     """
     Parse model output text into structured action format.
 
     Args:
         text: Raw model output containing thinking and tool_call tags.
+        scale_x: Divisor mapping raw x to [0, 1]; SCALE_FACTOR for MAI-UI's
+            0-999 convention, image width for pixel-answering models.
+        scale_y: Same as scale_x for the y axis (image height for pixels).
 
     Returns:
         Dictionary with keys:
@@ -120,7 +125,7 @@ def parse_action_to_structure_output(text: str) -> Dict[str, Any]:
             - "action_json": Parsed action with normalized coordinates
 
     Note:
-        Coordinates are normalized to [0, 1] range by dividing by SCALE_FACTOR.
+        Coordinates are normalized to [0, 1] range by dividing by scale_x/scale_y.
     """
     text = text.strip()
 
@@ -142,8 +147,8 @@ def parse_action_to_structure_output(text: str) -> Dict[str, Any]:
             raise ValueError(
                 f"Invalid coordinate format: expected 2 or 4 values, got {len(coordinates)}"
             )
-        point_x = point_x / SCALE_FACTOR
-        point_y = point_y / SCALE_FACTOR
+        point_x = point_x / scale_x
+        point_y = point_y / scale_y
         action["coordinate"] = [point_x, point_y]
     
     if "start_coordinate" in action:
@@ -158,8 +163,8 @@ def parse_action_to_structure_output(text: str) -> Dict[str, Any]:
             raise ValueError(
                 f"Invalid coordinate format: expected 2 or 4 values, got {len(coordinates)}"
             )
-        point_x = point_x / SCALE_FACTOR
-        point_y = point_y / SCALE_FACTOR
+        point_x = point_x / scale_x
+        point_y = point_y / scale_y
         action["start_coordinate"] = [point_x, point_y]
     
     if "end_coordinate" in action:
@@ -174,8 +179,8 @@ def parse_action_to_structure_output(text: str) -> Dict[str, Any]:
             raise ValueError(
                 f"Invalid coordinate format: expected 2 or 4 values, got {len(coordinates)}"
             )
-        point_x = point_x / SCALE_FACTOR
-        point_y = point_y / SCALE_FACTOR
+        point_x = point_x / scale_x
+        point_y = point_y / scale_y
         action["end_coordinate"] = [point_x, point_y]
 
     return {
@@ -223,6 +228,9 @@ class MAIUINaivigationAgent(BaseAgent):
                 - top_k: Top-k sampling parameter (default: -1)
                 - top_p: Top-p sampling parameter (default: 1.0)
                 - max_tokens: Maximum tokens in response (default: 2048)
+                - coordinate_scale: coordinate convention the model answers in;
+                  "thousand" (default, MAI-UI's 0-999 range) or "pixels" (raw
+                  screenshot pixels, e.g. BigModel glm vision models)
             tools: Optional list of MCP tool definitions. Each tool should be a dict
                 with 'name', 'description', and 'parameters' keys.
         """
@@ -255,6 +263,13 @@ class MAIUINaivigationAgent(BaseAgent):
         self.max_tokens = self.runtime_conf["max_tokens"]
         self.history_n = self.runtime_conf["history_n"]
 
+        coordinate_scale = self.runtime_conf.get("coordinate_scale", "thousand")
+        if coordinate_scale not in ("thousand", "pixels"):
+            raise ValueError(
+                f"coordinate_scale must be 'thousand' or 'pixels', got {coordinate_scale!r}"
+            )
+        self.coordinate_scale = coordinate_scale
+
     @property
     def system_prompt(self) -> str:
         """
@@ -269,6 +284,13 @@ class MAIUINaivigationAgent(BaseAgent):
             )
             return MAI_MOBILE_SYS_PROMPT_ASK_USER_MCP.render(tools=mcp_tools_str)
         return MAI_MOBILE_SYS_PROMPT
+
+    def _denormalize_point(self, step: TrajStep, point_x: float, point_y: float) -> List[int]:
+        """Echo a stored [0, 1] point in the model's coordinate convention."""
+        if self.coordinate_scale == "pixels" and step.screenshot is not None:
+            width, height = step.screenshot.size
+            return [int(point_x * width), int(point_y * height)]
+        return [int(point_x * SCALE_FACTOR), int(point_y * SCALE_FACTOR)]
 
     @property
     def history_responses(self) -> List[str]:
@@ -289,7 +311,7 @@ class MAIUINaivigationAgent(BaseAgent):
 
             action_json = copy.deepcopy(structured_action.get("action_json", {}))
 
-            # Convert normalized coordinates back to SCALE_FACTOR range
+            # Echo coordinates in the model's own scale so history stays consistent
             if "coordinate" in action_json:
                 coordinates = action_json.get("coordinate", [])
                 if len(coordinates) == 2:
@@ -300,10 +322,7 @@ class MAIUINaivigationAgent(BaseAgent):
                     point_y = (y1 + y2) / 2
                 else:
                     continue
-                action_json["coordinate"] = [
-                    int(point_x * SCALE_FACTOR),
-                    int(point_y * SCALE_FACTOR),
-                ]
+                action_json["coordinate"] = self._denormalize_point(step, point_x, point_y)
 
             tool_call_dict = {
                 "name": "mobile_use",
@@ -336,10 +355,7 @@ class MAIUINaivigationAgent(BaseAgent):
                 point_y = (y1 + y2) / 2
             else:
                 raise ValueError(f"Invalid coordinate format: expected 2 or 4 values, got {len(coordinates)}")
-            action_json["coordinate"] = [
-                int(point_x * SCALE_FACTOR),
-                int(point_y * SCALE_FACTOR),
-            ]
+            action_json["coordinate"] = self._denormalize_point(step, point_x, point_y)
 
         tool_call_dict = {
             "name": "mobile_use",
@@ -553,8 +569,13 @@ class MAIUINaivigationAgent(BaseAgent):
                 prediction = response.choices[0].message.content.strip()
                 print(f"Raw response:\n{prediction}")
 
-                # Parse response
-                parsed_response = parse_action_to_structure_output(prediction)
+                # Parse response, mapping the model's coordinate convention to
+                # [0, 1]; pixel-answering models are scaled by this screenshot's size.
+                if self.coordinate_scale == "pixels":
+                    scale_x, scale_y = screenshot_pil.size
+                else:
+                    scale_x = scale_y = SCALE_FACTOR
+                parsed_response = parse_action_to_structure_output(prediction, scale_x, scale_y)
                 thinking = parsed_response["thinking"]
                 action_json = parsed_response["action_json"]
                 print(f"Parsed response:\n{parsed_response}")
